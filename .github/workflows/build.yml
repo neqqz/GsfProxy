@@ -39,15 +39,28 @@ jobs:
           sdkmanager "build-tools;30.0.3"
           echo "Build tools 30.0.3 installed."
 
+      - name: Load signing config
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          LOCAL_PROPERTIES: ${{ secrets.LOCAL_PROPERTIES }}
+        run: |
+          KS="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$KS"
+          printf '%s\n' "$LOCAL_PROPERTIES" | tr -d '\r' > "$RUNNER_TEMP/signing.properties"
+          for k in KEYSTORE_PASS ALIAS_NAME ALIAS_PASS; do
+            v=$(grep -m1 "^$k=" "$RUNNER_TEMP/signing.properties" | cut -d= -f2-)
+            [ -n "$v" ] || { echo "::error::$k is missing in LOCAL_PROPERTIES secret"; exit 1; }
+            echo "::add-mask::$v"
+            echo "$k=$v" >> "$GITHUB_ENV"
+          done
+          echo "KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/signing.properties"
+
       - name: Build and Sign APK
         run: |
           # 1. Сборка unsigned APK
           echo "Building unsigned APK..."
           ./gradlew assembleRelease
-
-          # 2. Декодирование и сохранение Keystore
-          echo "Decoding Keystore..."
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore.jks
 
           # 3. Определение путей к инструментам (теперь они точно существуют)
           BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/30.0.3/"
@@ -79,10 +92,10 @@ jobs:
           # 5. Подпись APK через apksigner
           echo "Signing aligned APK with apksigner..."
           "$APKSIGNER" sign \
-            --ks keystore.jks \
-            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
-            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
-            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            --ks "$KEYSTORE_PATH" \
+            --ks-key-alias "$ALIAS_NAME" \
+            --ks-pass env:KEYSTORE_PASS \
+            --key-pass env:ALIAS_PASS \
             --min-sdk-version 21 \
             --v1-signing-enabled true \
             --v2-signing-enabled true \
